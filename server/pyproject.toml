@@ -1,0 +1,16 @@
+[project]
+name = "perceptionai-server"
+version = "0.1.0"
+dependencies = [
+  "fastapi",
+  "uvicorn[standard]",
+  "websockets",
+  "pydantic",
+  "peewee",
+  "psycopg2-binary",
+  "numpy",
+  "textblob",
+]
+
+[tool.uvicorn]
+factory = false

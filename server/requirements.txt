@@ -1,0 +1,24 @@
+# Core web framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+
+# Async + websocket handling
+websockets>=12.0
+aiohttp>=3.9.5
+
+# Data + ORM
+peewee>=3.17.0
+psycopg2-binary>=2.9.9
+
+# Utilities
+pydantic>=2.8.2
+pydantic-settings>=2.4.0
+python-dotenv>=1.0.1
+
+# Audio + analysis
+numpy>=1.26.4
+textblob>=0.18.0
+librosa>=0.10.2  # optional: for richer pitch/energy features
+
+# Optional extras (for hackathon debugging and fast reload)
+watchfiles>=0.22.0

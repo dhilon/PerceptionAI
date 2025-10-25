@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+websockets
+pydantic
+peewee
+psycopg2-binary
+numpy
+textblob
