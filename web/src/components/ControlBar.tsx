@@ -3,18 +3,19 @@ import { startMicStream } from "../lib/audio";
 import { connectWS } from "../lib/ws";
 
 export default function ControlBar({ onEvent }: { onEvent: (m: any) => void }) {
-    const wsRef = useRef<WebSocket | null>(null);
+    const [status, setStatus] = useState<"idle" | "connecting" | "open" | "closed" | "error">("idle");
+    const wsRef = useRef<{ send: (d: any) => void, close: () => void } | null>(null);
     const stopMicRef = useRef<null | (() => void)>(null);
     const [live, setLive] = useState(false);
 
     const start = async () => {
-        wsRef.current = connectWS(`ws://${location.hostname}:8001/ws/stream`, onEvent);
-        stopMicRef.current = await startMicStream((buf) => wsRef.current?.send(buf));
+        wsRef.current = connectWS(`ws://${location.hostname}:8001/ws/stream`, onEvent, (s) => setStatus(s));
+        stopMicRef.current = await startMicStream((buf) => wsRef.current?.send?.(buf));
         setLive(true);
     };
     const stop = () => {
-        wsRef.current?.send(JSON.stringify({ type: "end" }));
-        stopMicRef.current?.(); wsRef.current?.close(); setLive(false);
+        wsRef.current?.send?.(JSON.stringify({ type: "end" }));
+        stopMicRef.current?.(); wsRef.current?.close?.(); setLive(false);
     };
 
     return (
