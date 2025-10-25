@@ -1,4 +1,3 @@
-// Converts Float32 audio frames to Int16 PCM and sends to main thread.
 class PCM16Worklet extends AudioWorkletProcessor {
     process(inputs) {
         const input = inputs[0];
@@ -10,10 +9,8 @@ class PCM16Worklet extends AudioWorkletProcessor {
             let s = Math.max(-1, Math.min(1, f32[i]));
             pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
         }
-        // post zero-copy to the page
-        this.port.postMessage(pcm16.buffer, [pcm16.buffer]);
-        return true; // keep alive
+        this.port.postMessage(pcm16.buffer, [pcm16.buffer]); // zero-copy to main thread
+        return true;
     }
 }
-
-registerProcessor('pcm16-worklet', PCM16Worklet);
+registerProcessor("pcm16-worklet", PCM16Worklet);
