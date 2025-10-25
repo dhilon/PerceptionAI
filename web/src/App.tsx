@@ -7,7 +7,7 @@ export default function App() {
 
     useEffect(() => {
         setStatus("connecting");
-        const ws = new WebSocket(`ws://${location.hostname}:8000/ws/stream`);
+        const ws = new WebSocket(`ws://${location.hostname}:8001/ws/stream`);
         wsRef.current = ws;
         ws.onopen = () => setStatus("open");
         ws.onclose = () => setStatus("closed");

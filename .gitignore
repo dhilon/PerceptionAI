@@ -1,0 +1,14 @@
+./server/.env
+./server/.venv
+./server/.deps_installed
+./server/__pycache__
+./server/app/__pycache__
+./server/app/audio/__pycache__
+./server/app/nlp/__pycache__
+./server/app/fish_audio/__pycache__
+./server/app/fish_audio/client.pyc
+./server/app/fish_audio/types.pyc
+./server/app/nlp/sentiment.pyc
+./server/app/nlp/fuse.pyc
+./server/app/audio/prosody.pyc
+./server/app/audio/vad.pyc

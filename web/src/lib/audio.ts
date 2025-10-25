@@ -1,24 +1,28 @@
 export async function startMicStream(onChunk: (buf: ArrayBuffer) => void) {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const ctx = new AudioContext({ sampleRate: 16000 }); // let browser resample
-    const src = ctx.createMediaStreamSource(stream);
-    const processor = ctx.createScriptProcessor(4096, 1, 1);
-    src.connect(processor);
-    processor.connect(ctx.destination);
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
 
-    processor.onaudioprocess = (e) => {
-        const data = e.inputBuffer.getChannelData(0);
-        // float32 -> PCM16
-        const pcm16 = new Int16Array(data.length);
-        for (let i = 0; i < data.length; i++) {
-            let s = Math.max(-1, Math.min(1, data[i]));
-            pcm16[i] = s < 0 ? s * 0x8001 : s * 0x7fff;
-        }
-        onChunk(pcm16.buffer);
+    // Load the worklet module (served by Vite from /src)
+    await ctx.audioWorklet.addModule('/src/worklets/pcm16-worklet.js');
+
+    const source = ctx.createMediaStreamSource(stream);
+    const node = new (window as any).AudioWorkletNode(ctx, 'pcm16-worklet');
+
+    // Receive PCM16 buffers from the worklet thread
+    node.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
+        onChunk(e.data);
     };
 
+    // Don’t route to speakers to avoid feedback; connect to a silent Gain
+    const mute = ctx.createGain();
+    mute.gain.value = 0;
+    source.connect(node).connect(mute).connect(ctx.destination);
+
     return () => {
-        processor.disconnect(); src.disconnect();
+        node.port.onmessage = null;
+        node.disconnect();
+        source.disconnect();
+        mute.disconnect();
         stream.getTracks().forEach(t => t.stop());
         ctx.close();
     };
