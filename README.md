@@ -1,59 +1,62 @@
 # PerceptionAI
-It's not what you said, it's how you said it. Perception AI will tell you both of those things in just a quick, 20-second, speech-to-text analysis.
+Real-time voice intelligence: fast speech-to-text with simple emotion analysis.
 
-🧠 PerceptionAI — Real-Time Voice Intelligence
-🎙️ Powered by FastAPI · React · WebSockets · Fish Audio ASR
-🚀 Overview
+## 🚀 Quickstart (TL;DR)
+- Backend + Frontend in one command:
+  - `./scripts/dev.sh` (runs FastAPI on 8001 and Vite on 5175)
+- Visit http://localhost:5175
+- Click “🎙️ Record”, speak, then use the controls:
+  - ⏸️ Pause Conversation: finalize the current segment, timer keeps accumulating
+  - 🔪 Clip Script: finalize current segment and create a distinct clip entry
+  - ❌ End Conversation: fully stop and finalize the session
+
+That’s it. See below for details if you need them.
 
 PerceptionAI is a real-time speech-to-text platform built for the modern voice-driven web.
 It streams audio directly from the user’s browser microphone, transmits it through a high-performance FastAPI WebSocket backend, and interfaces with the Fish Audio API for transcription and natural language analysis.
 
 Originally created for Cal Hacks, this project demonstrates how to seamlessly combine AI voice intelligence, cloud-scale ASR (Automatic Speech Recognition), and real-time web tech into a cohesive, production-ready experience.
 
-🧱 Project Structure
+## 🧱 Project Structure
+```text
 PerceptionAI/
-│
-├── README.md                     ← this file
-├── scripts/
-│   └── dev.sh                    ← unified local dev launcher (frontend + backend)
-│
-├── server/                       ← FastAPI backend (Python 3.13)
-│   ├── .env                      ← API keys and environment vars (ignored by git)
-│   ├── requirements.txt          ← backend dependencies
-│   ├── app/
-│   │   ├── main.py               ← entrypoint defining /ws/stream WebSocket
-│   │   ├── config.py             ← loads env variables via pydantic-settings
-│   │   ├── fish_audio/
-│   │   │   ├── client.py         ← abstraction for Fish Audio ASR + WS clients
-│   │   │   └── __init__.py
-│   │   └── __init__.py
-│   └── .venv/                    ← Python virtual environment (ignored)
-│
-├── web/                          ← React/Vite frontend
-│   ├── index.html                ← HTML root served by Vite
-│   ├── package.json              ← npm dependencies
-│   ├── src/
-│   │   ├── App.tsx               ← main React component / UI
-│   │   ├── audio.ts              ← microphone capture + PCM streaming
-│   │   ├── main.tsx              ← ReactDOM mount entrypoint
-│   │   └── components/           ← optional UI components
-│   └── tsconfig.json             ← TypeScript config
-│
-└── ...
+├─ README.md                         # this file
+├─ scripts/
+│  └─ dev.sh                         # unified local dev launcher (frontend + backend)
+├─ server/                           # FastAPI backend (Python 3.13)
+│  ├─ .env                           # API keys and env vars (ignored)
+│  ├─ requirements.txt               # backend dependencies
+│  └─ app/
+│     ├─ main.py                     # /ws/stream WebSocket
+│     ├─ config.py                   # env via pydantic-settings
+│     ├─ fish_audio/
+│     │  └─ client.py                # Fish Audio ASR (REST/WS)
+│     └─ ...
+└─ web/                              # React/Vite frontend
+   ├─ index.html
+   ├─ package.json
+   └─ src/
+      ├─ App.tsx                     # main UI
+      ├─ lib/                        # ws/audio helpers
+      └─ components/                 # UI components
+```
 
-💡 Tech Stack
-Layer	Language / Framework	Description
-Frontend	React + TypeScript + Vite	Fast developer experience, modular component system, WebSocket support
-Audio Handling	Web Audio API (AudioWorklet / ScriptProcessor)	Captures live mic input, encodes PCM16, streams to backend
-Backend	Python 3.13 + FastAPI	High-performance ASGI framework for REST & WebSocket routes
-Async Runtime	uvicorn + asyncio	Concurrent, event-driven network layer
-External AI Service	Fish Audio API	Provides ASR (speech-to-text) and TTS (text-to-speech) via REST and WS
-HTTP Client	httpx	Async HTTP uploads for audio files
-Realtime Transport	websockets	For optional realtime mode (Fish’s WS endpoint)
-Configuration	pydantic-settings	Type-safe environment management
-Package Mgmt	pip / npm	Dependency management for both layers
-Launcher Script	Bash (scripts/dev.sh)	Runs server & frontend concurrently for dev
-⚙️ Module Breakdown
+## 💡 Tech Stack
+
+| Layer | Language / Framework | Description |
+| --- | --- | --- |
+| Frontend | React, TypeScript, Vite | Modular UI, fast DX, WebSocket support |
+| Audio Handling | Web Audio API (AudioWorklet) | Capture mic, encode PCM16, stream WS |
+| Backend | Python 3.13, FastAPI | High-performance REST + WebSocket |
+| Async Runtime | uvicorn, asyncio | Concurrent, event-driven networking |
+| ASR | Fish Audio API | Speech-to-text (REST/WS) |
+| HTTP Client | httpx | Async uploads for REST |
+| Realtime | websockets | Fish realtime WS client |
+| Config | pydantic-settings | Type-safe env management |
+| Package Mgmt | pip, npm | Dependencies for both layers |
+| Launcher | Bash (`scripts/dev.sh`) | One command to run both apps |
+
+## ⚙️ Module Breakdown
 🧩 Server — server/app/
 File	Purpose
 main.py	Defines /ws/stream, handles WebSocket lifecycle, receives audio chunks, calls Fish ASR, emits transcripts

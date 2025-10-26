@@ -1,5 +1,6 @@
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
+import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # .../server
 ENV_PATH = BASE_DIR / ".env"
@@ -9,11 +10,9 @@ class Settings(BaseSettings):
     # fish
     FISH_API_KEY: str = ""
     # set mode: "asr_rest" (recommended MVP), "realtime_ws" (later), or "mock"
-    FISH_MODE: str = "asr_rest"
-    FISH_ASR_URL: str = "https://api.fish.audio/v1/asr"
-    FISH_REALTIME_WS: str = (
-        "wss://api.fish.audio/v1/realtime"  # if/when you try WS again
-    )
+    FISH_MODE: str = os.getenv("FISH_MODE")
+    FISH_ASR_URL: str = os.getenv("FISH_ASR_URL")
+    FISH_REALTIME_WS: str = os.getenv("FISH_REALTIME_WS")
 
     # db (optional)
     PG_DB: str = "empathai"
