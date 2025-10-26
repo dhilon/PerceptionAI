@@ -1,108 +1,85 @@
+# server/app/fuse.py
+"""
+Fuse text-based valence/arousal with optional prosody features from audio.
+
+Inputs:
+  text_scores: dict from sentiment.analyze_text(...)
+  prosody: {
+      "rms": float in [0..1]         # loudness (normalized)
+      "pitch_var": float in [0..1]   # pitch variability
+      "speech_rate": float in [0..1] # words/sec normalized
+  }  # each is optional
+
+Output:
+  { valence, arousal, label }
+"""
+
 from __future__ import annotations
+from typing import Dict, Optional
+import math
 
-from typing import Dict, List
+NEUTRAL_V = 0.10
+NEUTRAL_A = 0.10
 
-
-POSITIVE_SET = {
-    "Happy",
-    "Excited",
-    "Confident",
-    "Satisfied",
-    "Delighted",
-    "Proud",
-    "Relaxed",
-    "Grateful",
-    "Moved",
-    "Calm",
-    "Curious",
-    "Empathetic",
-}
-
-NEGATIVE_SET = {
-    "Sad",
-    "Angry",
-    "Nervous",
-    "Scared",
-    "Worried",
-    "Upset",
-    "Frustrated",
-    "Depressed",
-    "Embarrassed",
-    "Disgusted",
-    "Sarcastic",
-}
+# weights: valence mainly text; arousal from both
+W_TEXT_VAL = 0.9
+W_AUDIO_VAL = 0.1
+W_TEXT_ARO = 0.5
+W_AUDIO_ARO = 0.5
 
 
-def _choose_label_from_av(
-    arousal01: float, valence01: float, candidates: List[str]
-) -> str:
-    """Pick a candidate label consistent with arousal/valence quadrant."""
-    hi_a = arousal01 >= 0.6
-    lo_a = arousal01 <= 0.4
-    hi_v = valence01 >= 0.6
-    lo_v = valence01 <= 0.4
-
-    prefer: List[str] = []
-    if hi_a and hi_v:
-        prefer = ["Excited", "Happy", "Proud", "Confident", "Delighted"]
-    elif hi_a and lo_v:
-        prefer = ["Angry", "Frustrated", "Sarcastic"]
-    elif lo_a and hi_v:
-        prefer = ["Calm", "Relaxed", "Grateful", "Empathetic", "Moved"]
-    elif lo_a and lo_v:
-        prefer = ["Depressed", "Sad", "Worried", "Upset"]
-    else:
-        # Mid-arousal: steer by valence
-        if lo_v:
-            prefer = ["Sad", "Upset", "Frustrated", "Depressed"]
-        elif hi_v:
-            prefer = ["Happy", "Satisfied", "Proud", "Delighted"]
-        else:
-            prefer = ["Curious", "Surprised", "Calm"]
-
-    for p in prefer:
-        if p in candidates:
-            return p
-    # fallback to first candidate
-    return candidates[0] if candidates else "indifferent"
+def _nz(x: Optional[float], default=0.0) -> float:
+    return float(x) if x is not None else default
 
 
-def fuse_emotion(
-    prosody_state: Dict | None,
-    sentiment_result: Dict,
-) -> Dict[str, float | str]:
-    """
-    Combine prosody arousal/valence (0..1) with text sentiment results to a 24-emotion label.
-    sentiment_result: { 'scores': {emo:prob}, 'label': str, 'polarity': [-1,1] }
-    Returns: { arousal, valence, label }
-    """
-    arousal = 0.5
-    audio_valence = 0.5
-    if prosody_state:
-        arousal = float(prosody_state.get("arousal", 0.5))
-        audio_valence = float(prosody_state.get("valence", 0.5))
+def _normalize_valence(v: float) -> float:
+    return max(-1.0, min(1.0, v))
 
-    polarity = float(sentiment_result.get("polarity", 0.0))  # -1..1
-    text_valence01 = (polarity + 1.0) / 2.0
-    text_arousal01 = float(sentiment_result.get("arousal", 0.5))
-    # Blend: text drives valence more; audio refines. Arousal blends both.
-    fused_valence01 = 0.65 * text_valence01 + 0.35 * audio_valence
-    fused_arousal01 = 0.5 * text_arousal01 + 0.5 * arousal
 
-    scores: Dict[str, float] = sentiment_result.get("scores", {}) or {}
-    if not scores:
-        # fabricate a neutral-ish distribution
-        scores = {"Calm": 1.0}
+def _normalize_arousal(a: float) -> float:
+    return max(0.0, min(1.0, a))
 
-    # rank candidates by model score then pick one consistent with AV
-    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
-    candidates = [lab for lab, _ in ranked[:6]]  # consider top-6
 
-    # steer toward positive/negative family based on fused valence
-    if fused_valence01 >= 0.55:
-        candidates = [c for c in candidates if c in POSITIVE_SET] or candidates
-    elif fused_valence01 <= 0.45:
-        candidates = [c for c in candidates if c in NEGATIVE_SET] or candidates
+def _label_from_quadrant(v: float, a: float) -> str:
+    # simple quadrant mapping, refined around chart semantics
+    if abs(v) < NEUTRAL_V and a < NEUTRAL_A:
+        return "neutral"
+    if v >= 0 and a >= 0.6:
+        return "excited" if v > 0.6 else "happy"
+    if v >= 0 and a < 0.4:
+        return "calm" if v >= 0.6 else "content"
+    if v < 0 and a >= 0.6:
+        return "angry"  # includes afraid/frustrated cluster
+    if v < 0 and a < 0.4:
+        return "sad"
+    return "neutral"
 
-    label = _choose_label_from_av(fused_arousal01, fused_valence01, candidates)
-    return {"arousal": fused_arousal01, "valence": fused_valence01, "label": label}
+
+def fuse(text_scores: Dict, prosody: Optional[Dict] = None) -> Dict[str, float | str]:
+    prosody = prosody or {}
+    v_text = float(text_scores.get("valence", 0.0))
+    a_text = float(text_scores.get("arousal", 0.0))
+
+    # Map audio features → arousal proxy in [0..1]
+    rms = _nz(prosody.get("rms"))  # louder → higher arousal
+    pitch_var = _nz(prosody.get("pitch_var"))  # more variation → higher arousal
+    speech_rt = _nz(prosody.get("speech_rate"))  # faster → higher arousal
+
+    # Combine audio features (bounded)
+    a_audio = max(0.0, min(1.0, 0.50 * rms + 0.30 * pitch_var + 0.20 * speech_rt))
+
+    # Valence slightly nudged by prosody (anger tends to be louder/variable, but keep small)
+    v_audio = (
+        0.20 * (rms + pitch_var) - 0.10 * speech_rt
+    )  # tiny effect; could be learned
+
+    # Fuse
+    v = _normalize_valence(W_TEXT_VAL * v_text + W_AUDIO_VAL * v_audio)
+    a = _normalize_arousal(W_TEXT_ARO * a_text + W_AUDIO_ARO * a_audio)
+
+    # Neutral rule
+    if abs(v) < NEUTRAL_V and a < NEUTRAL_A:
+        return {"valence": 0.0, "arousal": 0.0, "label": "neutral"}
+
+    label = _label_from_quadrant(v, a)
+    return {"valence": v, "arousal": a, "label": label}

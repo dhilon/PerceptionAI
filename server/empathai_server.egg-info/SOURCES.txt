@@ -13,8 +13,8 @@ app/fish_audio/client.py
 app/fish_audio/types.py
 app/nlp/fuse.py
 app/nlp/sentiment.py
-empathai_server.egg-info/PKG-INFO
-empathai_server.egg-info/SOURCES.txt
-empathai_server.egg-info/dependency_links.txt
-empathai_server.egg-info/requires.txt
-empathai_server.egg-info/top_level.txt
+perceptionai_server.egg-info/PKG-INFO
+perceptionai_server.egg-info/SOURCES.txt
+perceptionai_server.egg-info/dependency_links.txt
+perceptionai_server.egg-info/requires.txt
+perceptionai_server.egg-info/top_level.txt

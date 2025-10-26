@@ -7,6 +7,8 @@ from fastapi.routing import APIRoute
 from .fish_audio.client import get_fish_client, FishAudioASRClient
 from .analysis import analyze_emotion
 from .ws_utils import safe_send_json, safe_close
+from .nlp.sentiment import analyze_text
+from .nlp.fuse import fuse
 
 app = FastAPI()
 app.add_middleware(
@@ -142,17 +144,18 @@ async def ws_stream(ws: WebSocket):
         await safe_close(ws)
 
 
-async def pipe_events(fish, ws: WebSocket):
-    from starlette.websockets import WebSocketDisconnect
+async def pipe_events(fish, ws):
+    async for ev in fish.events():
+        if ev.get("type") == "transcript.final":
+            text = ev.get("data", {}).get("text", "")
+            text_scores = analyze_text(text)
 
-    try:
-        async for ev in fish.events():
-            if ev.get("type") == "transcript.final":
-                text = ev.get("data", {}).get("text", "")
-                ev.setdefault("data", {})
-                ev["data"]["emotion"] = analyze_emotion(text)
-            ok = await safe_send_json(ws, ev)
-            if not ok:
-                break
-    except WebSocketDisconnect:
-        pass
+            # Optional: pass prosody you compute during streaming
+            # e.g., prosody = {"rms": avg_rms_0_1, "pitch_var": pv, "speech_rate": sr}
+            prosody = {}
+            emo = fuse(text_scores, prosody)
+
+            ev.setdefault("data", {})
+            ev["data"]["emotion"] = emo
+
+        await ws.send_json(ev)

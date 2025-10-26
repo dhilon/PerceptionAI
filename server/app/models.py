@@ -3,7 +3,7 @@ from peewee import *
 from datetime import datetime
 
 db = PostgresqlDatabase(
-    os.getenv("PG_DB", "empathai"),
+    os.getenv("PG_DB", "perceptionai"),
     user=os.getenv("PG_USER", "postgres"),
     password=os.getenv("PG_PASS", "postgres"),
     host=os.getenv("PG_HOST", "127.0.0.1"),

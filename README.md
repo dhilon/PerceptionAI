@@ -6,9 +6,8 @@ Real-time voice intelligence: fast speech-to-text with simple emotion analysis.
   - `./scripts/dev.sh` (runs FastAPI on 8001 and Vite on 5175)
 - Visit http://localhost:5175
 - Click “🎙️ Record”, speak, then use the controls:
-  - ⏸️ Pause Conversation: finalize the current segment, timer keeps accumulating
+  - ⏸️ Pause Conversation: finalize the current segment, timer/emotion will keep accumulating after you click Record again
   - 🔪 Clip Script: finalize current segment and create a distinct clip entry
-  - ❌ End Conversation: fully stop and finalize the session
 
 That’s it. See below for details if you need them.
 
@@ -223,6 +222,24 @@ Notes
 - If you prefer one-shot uploads instead of streaming, send `{ "type": "upload", audio_b64 }` where `audio_b64` is your PCM16 audio as Base64; the server will replace the buffer and finalize right away.
 - In REST mode, the server accumulates or replaces bytes internally and converts to `.wav` on finalize.
 
+## 🎚️ Emotion Metrics: Valence & Arousal
+
+We score emotion along two continuous dimensions plus a discrete label:
+
+- Valence (-1.00 to 1.00): how positive vs. negative the tone is.
+  - 0.00 ≈ very negative; 1.00 ≈ very positive.
+  - Fused as: `valence = 0.65 * text_valence + 0.35 * audio_valence`, where `text_valence = (polarity + 1) / 2` and `audio_valence` comes from prosody.
+
+- Arousal (0.00 to 1.00): how activated/energetic the delivery is.
+  - 0.00 ≈ very calm; 1.00 ≈ very intense/energized.
+  - Fused as: `arousal = 0.5 * text_arousal + 0.5 * audio_arousal`.
+
+- Label: selected from the 24-label taxonomy (Happy, Sad, Angry, …) plus the graph displayed below to fit the fused valence/arousal quadrant and text cues.
+
+Display
+- Values are shown to two decimals (e.g., `arousal: 0.72`, `valence: 0.41`).
+- Labels may include intensity (e.g., “Very Angry”, “Slightly Calm”) based on polarity magnitude.
+
 🔍 Architecture Diagram
          ┌────────────────────────────┐
          │  React + Vite Frontend     │
@@ -299,5 +316,3 @@ MIT License © 2025 Dhilon Prasad & Contributors
 git clone https://github.com/<you>/PerceptionAI.git
 cd PerceptionAI
 ./scripts/dev.sh
-# Visit http://localhost:5175
-# Click 🎙️ Record → speak → ⏹ Stop → read your transcript!

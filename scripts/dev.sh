@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# EmpathAI unified dev runner (absolute paths + auto venv)
+# PerceptionAI unified dev runner (absolute paths + auto venv)
 # Usage: bash scripts/dev.sh
 
 set -euo pipefail

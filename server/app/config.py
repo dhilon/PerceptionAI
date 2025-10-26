@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     FISH_REALTIME_WS: str = os.getenv("FISH_REALTIME_WS")
 
     # db (optional)
-    PG_DB: str = "empathai"
+    PG_DB: str = "perceptionai"
     PG_USER: str = "postgres"
     PG_PASS: str = "postgres"
     PG_HOST: str = "127.0.0.1"
