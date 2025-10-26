@@ -1,235 +1,122 @@
-# server/app/sentiment.py
+# server/app/nlp/sentiment.py
 """
-Text → (valence, arousal, label) aligned to the standard valence–arousal chart.
+Audio-only valence–arousal estimation + nearest-emotion labeling.
 
-valence  ∈ [-1.0, 1.0]  (unpleasant → pleasant)
-arousal  ∈ [ 0.0, 1.0 ] (low → high)
+Inputs (per utterance or rolling window):
+  prosody = {
+    "rms":        float in [0..1],   # normalized loudness
+    "rms_std":    float in [0..1],   # loudness variability within the window
+    "speech_rate":float in [0..1],   # optional: relative words/sec (0=slow,1=fast)
+  }
 
-Neutral rule: if abs(valence) < NEUTRAL_V and arousal < NEUTRAL_A → label 'neutral'
+Outputs:
+  { "valence": [-1..1], "arousal": [0..1], "label": str }
 """
 
 from __future__ import annotations
+from typing import Dict, Tuple
 import math
-import re
-from typing import Dict, Tuple, List, Optional
+from .gain import (
+    AROUSAL_GAIN,
+    VALENCE_GAIN,
+    AROUSAL_CONTRAST,
+    VALENCE_CONTRAST,
+    NEUTRAL_V,
+    NEUTRAL_A,
+)
 
-# Optional dependency: textblob for polarity (valence). Falls back if missing.
-try:
-    from textblob import TextBlob  # polarity ∈ [-1, 1]
-except Exception:  # pragma: no cover
-    TextBlob = None  # type: ignore
+# ---------- thresholds ----------
+NEUTRAL_V = 0.05
+NEUTRAL_A = 0.05
 
-# ---------------------------
-# Tunables
-# ---------------------------
-NEUTRAL_V = 0.10  # |valence| below this → near neutral
-NEUTRAL_A = 0.10  # arousal below this → near neutral
-POLARITY_WEIGHT = 0.55  # how much TextBlob polarity affects valence
-LEXICON_WEIGHT = 0.45  # how much our lexicon affects valence/arousal
-INTENSITY_WEIGHT = 0.30  # extra arousal from punctuation/intensifiers (capped)
-MAX_BONUS_AROUSAL = 0.35
 
-# ---------------------------
-# Lexicon (from your chart + list)
-# Values are (valence [-1..1], arousal [0..1])
-# ---------------------------
-LEXICON: Dict[str, Tuple[float, float]] = {
-    # high arousal, positive valence
-    "astonished": (0.6, 0.95),
-    "excited": (0.8, 0.90),
-    "aroused": (0.6, 0.85),
-    "delighted": (0.85, 0.75),
-    "glad": (0.75, 0.60),
-    "pleased": (0.75, 0.55),
-    "happy": (0.85, 0.70),
-    "satisfied": (0.70, 0.45),
-    "content": (0.65, 0.35),
-    # low arousal, positive valence
-    "serene": (0.75, 0.20),
-    "calm": (0.65, 0.20),
-    "relaxed": (0.70, 0.25),
-    # low arousal, negative valence
-    "tired": (-0.40, 0.15),
-    "sleepy": (-0.20, 0.10),
-    "droopy": (-0.45, 0.10),
-    "bored": (-0.55, 0.10),
-    "gloomy": (-0.65, 0.20),
-    "depressed": (-0.85, 0.25),
-    "miserable": (-0.90, 0.35),
-    "sad": (-0.70, 0.30),
-    # high arousal, negative valence
-    "afraid": (-0.80, 0.90),
-    "alarmed": (-0.75, 0.90),
-    "angry": (-0.85, 0.85),
-    "frustrated": (-0.75, 0.75),
-    "annoyed": (-0.55, 0.65),
-    "distressed": (-0.80, 0.65),
-    # extra labels from your long list
-    "worried": (-0.55, 0.65),
-    "upset": (-0.60, 0.60),
-    "scared": (-0.80, 0.85),
-    "embarrassed": (-0.50, 0.55),
-    "nervous": (-0.35, 0.70),
-    "confident": (0.55, 0.60),
-    "surprised": (0.40, 0.85),
-    "satisfied": (0.70, 0.45),
-    "delighted": (0.85, 0.75),
-    "calm": (0.65, 0.20),
-    "relaxed": (0.70, 0.25),
-    "depressed": (-0.85, 0.25),
-    "frustrated": (-0.75, 0.75),
-    "disgusted": (-0.85, 0.80),
-    "moved": (0.45, 0.55),
-    "proud": (0.70, 0.60),
-    "grateful": (0.75, 0.45),
-    "curious": (0.25, 0.55),
-    "sarcastic": (-0.20, 0.45),  # tricky; leave moderate arousal
-}
+def _clamp(x: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, x))
 
-LEXICON["thrilled"] = (0.9, 0.9)
-LEXICON["anxious"] = (-0.6, 0.8)
 
-# Prototype centroids to map (valence, arousal) → a discrete label
+# Prototypes (valence, arousal) roughly from your chart
 PROTOTYPES: Dict[str, Tuple[float, float]] = {
-    "happy": (0.85, 0.70),
     "excited": (0.80, 0.90),
-    "calm": (0.65, 0.20),
+    "happy": (0.85, 0.70),
     "content": (0.65, 0.35),
+    "calm": (0.65, 0.20),
     "relaxed": (0.70, 0.25),
-    "sad": (-0.70, 0.30),
-    "depressed": (-0.85, 0.25),
-    "angry": (-0.85, 0.85),
-    "frustrated": (-0.75, 0.75),
-    "afraid": (-0.80, 0.90),
     "surprised": (0.40, 0.85),
     "worried": (-0.55, 0.65),
-    "proud": (0.70, 0.60),
-    "grateful": (0.75, 0.45),
+    "afraid": (-0.80, 0.90),
+    "angry": (-0.85, 0.85),
+    "frustrated": (-0.75, 0.75),
+    "sad": (-0.70, 0.30),
+    "depressed": (-0.85, 0.25),
+    "bored": (-0.55, 0.10),
     "neutral": (0.00, 0.05),
 }
 
-INTENSIFIERS = {
-    "very",
-    "really",
-    "extremely",
-    "super",
-    "so",
-    "incredibly",
-    "absolutely",
-    "totally",
-}
-NEGATORS = {"not", "never", "no", "hardly", "barely", "scarcely"}
 
-WORD_RE = re.compile(r"[A-Za-z']+")
-
-
-def _normalize_valence(v: float) -> float:
-    return max(-1.0, min(1.0, v))
-
-
-def _normalize_arousal(a: float) -> float:
-    return max(0.0, min(1.0, a))
-
-
-def _polarity(text: str) -> float:
-    if TextBlob is None:
-        return 0.0
-    try:
-        return float(TextBlob(text).sentiment.polarity)  # [-1..1]
-    except Exception:
-        return 0.0
-
-
-def _intensity_bonus(text: str) -> float:
-    # + arousal for !!!, ALL CAPS tokens, many exclamation marks, intensifiers
-    exclam = text.count("!")
-    exclam_bonus = min(exclam / 6.0, 1.0) * 0.25  # ≤ 0.25
-
-    caps_tokens = sum(1 for w in WORD_RE.findall(text) if len(w) >= 3 and w.isupper())
-    caps_bonus = min(caps_tokens / 6.0, 1.0) * 0.20  # ≤ 0.20
-
-    words = [w.lower() for w in WORD_RE.findall(text)]
-    intens = sum(1 for w in words if w in INTENSIFIERS)
-    intens_bonus = min(intens / 3.0, 1.0) * 0.25  # ≤ 0.25
-
-    bonus = exclam_bonus + caps_bonus + intens_bonus
-    return min(bonus, MAX_BONUS_AROUSAL)
-
-
-def _lexicon_scores(text: str) -> Tuple[Optional[float], Optional[float]]:
-    words = [w.lower() for w in WORD_RE.findall(text)]
-    vals: List[float] = []
-    aros: List[float] = []
-
-    flip = 1.0
-    for i, w in enumerate(words):
-        # Simple negation scope (last 3 words flips sentiment)
-        if w in NEGATORS:
-            flip = -1.0
-            continue
-        if w in LEXICON:
-            v, a = LEXICON[w]
-            vals.append(flip * v)
-            aros.append(a)
-            flip = 1.0  # reset after application
-        else:
-            flip = 1.0
-
-    if not vals and not aros:
-        return None, None
-    v = sum(vals) / len(vals) if vals else None
-    a = sum(aros) / len(aros) if aros else None
-    return v, a
-
-
-def _closest_label(v: float, a: float) -> str:
+def _nearest_label(v: float, a: float) -> str:
     best, best_d = "neutral", float("inf")
-    for label, (pv, pa) in PROTOTYPES.items():
+    for lbl, (pv, pa) in PROTOTYPES.items():
         d = math.hypot(v - pv, a - pa)
         if d < best_d:
-            best, best_d = label, d
+            best, best_d = lbl, d
     return best
 
 
-def analyze_text(text: str) -> Dict[str, float | str]:
+def _contrast01(x: float, k: float) -> float:
+    # same logistic contrast helper as above, local copy
+    x = max(0.0, min(1.0, x))
+    y = 1.0 / (1.0 + math.exp(-k * (x - 0.5)))
+    y0 = 1.0 / (1.0 + math.exp(-k * (-0.5)))
+    y1 = 1.0 / (1.0 + math.exp(-k * (0.5)))
+    return max(0.0, min(1.0, (y - y0) / (y1 - y0)))
+
+
+def analyze_audio(prosody: Dict[str, float]) -> Dict[str, float | str]:
     """
-    Returns:
-      {
-        "valence": float ∈ [-1, 1],
-        "arousal": float ∈ [0, 1],
-        "label":   str
-      }
+    Higher negative sensitivity using volatility (rms_std), zcr, and crest.
     """
-    text = (text or "").strip()
-    if not text:
+    rms = _clamp(float(prosody.get("rms", 0.0)), 0.0, 1.0)
+    var = _clamp(float(prosody.get("rms_std", 0.0)), 0.0, 1.0)
+    rate = _clamp(float(prosody.get("speech_rate", 0.0)), 0.0, 1.0)
+    zcr = _clamp(float(prosody.get("zcr", 0.0)), 0.0, 1.0)
+    crest = _clamp(float(prosody.get("crest", 0.0)), 0.0, 1.0)
+
+    # ---------- AROUSAL ----------
+    rms_gamma = rms**0.55
+    var_gamma = var**0.85
+    zcr_gain = 0.12 * zcr
+    base_a = 0.75 * rms_gamma + 0.28 * var_gamma + 0.10 * rate + zcr_gain
+    a = _contrast01(base_a, AROUSAL_CONTRAST)
+    arousal = max(0.0, min(1.0, a * AROUSAL_GAIN))
+
+    # ---------- VALENCE ----------
+    steady = 1.0 - var
+    midness = 1.0 - min(1.0, abs(arousal - 0.5) / 0.5)
+    hi_energy = max(0.0, arousal - 0.60)
+    med_energy = max(0.0, arousal - 0.35) * (1.0 - hi_energy)  # mid band only
+    low_energy = max(0.0, 0.22 - arousal)
+    quiet = max(0.0, 0.12 - rms)
+
+    # Positive terms (unchanged-ish)
+    pos = 0.60 * steady * midness + 0.40 * steady * hi_energy
+
+    # Negative terms (stronger & earlier)
+    neg_hi = 1.05 * var * hi_energy + 0.70 * zcr * hi_energy + 0.55 * crest * hi_energy
+    neg_med = (
+        0.55 * (0.6 * zcr + 0.4 * var) * med_energy
+    )  # negative tension already in mid band
+    neg_low = 0.50 * quiet * low_energy  # sad/bored for very low
+    neg = neg_hi + neg_med + neg_low
+
+    raw_v = pos - 1.20 * neg  # <-- asymmetry: negatives weigh more
+    v = math.tanh(1.7 * raw_v)  # more contrast
+    v01 = (v + 1.0) * 0.5
+    v01 = _contrast01(v01, VALENCE_CONTRAST)
+    v = (v01 * 2.0) - 1.0
+    v = max(-1.0, min(1.0, v))
+
+    if abs(v) < NEUTRAL_V and arousal < NEUTRAL_A:
         return {"valence": 0.0, "arousal": 0.0, "label": "neutral"}
 
-    # 1) Polarity (valence)
-    pol = _polarity(text)
-
-    # 2) Lexicon match
-    lex_v, lex_a = _lexicon_scores(text)
-
-    # 3) Intensity → arousal bonus
-    ar_bonus = _intensity_bonus(text)
-
-    # 4) Blend
-    if lex_v is None:
-        v = pol
-    else:
-        v = POLARITY_WEIGHT * pol + LEXICON_WEIGHT * lex_v
-
-    if lex_a is None:
-        a = 0.35 + ar_bonus  # base mid arousal + intensity if no lexicon
-    else:
-        a = (1 - INTENSITY_WEIGHT) * lex_a + INTENSITY_WEIGHT * (lex_a + ar_bonus)
-
-    v = _normalize_valence(v)
-    a = _normalize_arousal(a)
-
-    # 5) Neutral rule
-    if abs(v) < NEUTRAL_V and a < NEUTRAL_A:
-        return {"valence": 0.0, "arousal": 0.0, "label": "neutral"}
-
-    label = _closest_label(v, a)
-    return {"valence": v, "arousal": a, "label": label}
+    label = _nearest_label(v, arousal)
+    return {"valence": v, "arousal": arousal, "label": label}

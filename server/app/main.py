@@ -2,13 +2,11 @@
 import json, asyncio, contextlib
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.routing import APIRoute
 
 from .fish_audio.client import get_fish_client, FishAudioASRClient
 from .analysis import analyze_emotion
 from .ws_utils import safe_send_json, safe_close
-from .nlp.sentiment import analyze_text
-from .nlp.fuse import fuse
+from .audio.prosody import ProsodyTracker
 
 app = FastAPI()
 app.add_middleware(
@@ -19,40 +17,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-@app.get("/healthz")
-def health():
-    return {"ok": True}
-
-
-@app.get("/routes")
-def list_routes():
-    out = []
-    for r in app.router.routes:
-        if isinstance(r, APIRoute):
-            out.append({"path": r.path, "methods": list(r.methods)})
-        else:
-            # WebSocketRoute doesn't subclass APIRoute, so capture path attr
-            path = getattr(r, "path", str(r))
-            out.append({"path": path, "methods": ["WS"]})
-    return out
+tracker = ProsodyTracker(sample_rate=16000, frame_ms=30)
 
 
 @app.websocket("/ws/stream")
 async def ws_stream(ws: WebSocket):
     await ws.accept()
     fish = get_fish_client()
-
-    # Try to connect to Fish; if it fails, optionally fall back to REST
+    # Prosody engine per connection to derive voice-only arousal/valence
     try:
-        await fish.connect(
-            {"language": "en", "punctuate": True, "word_timestamps": True}
+        await fish.connect()
+        # after await fish.connect(...)
+        await safe_send_json(
+            ws,
+            {"type": "debug", "stage": "stt", "message": f"mode={type(fish).__name__}"},
         )
+
     except Exception as e:
         msg = str(e)
-        # Optional fallback to REST if realtime blocked (401/402)
         if "HTTP 401" in msg or "HTTP 402" in msg or "Payment" in msg:
-            ok = await safe_send_json(
+            await safe_send_json(
                 ws,
                 {
                     "type": "debug",
@@ -76,86 +60,101 @@ async def ws_stream(ws: WebSocket):
             await safe_close(ws, 1011)
             return
 
-    events_task = asyncio.create_task(pipe_events(fish, ws))
+    events_task = asyncio.create_task(
+        pipe_events(fish, ws, get_prosody=lambda: tracker.finalize())
+    )
+
+    events_task = asyncio.create_task(
+        pipe_events(fish, ws, get_prosody=lambda: tracker.finalize())
+    )
 
     try:
-        while True:
-            try:
-                msg = await ws.receive()
-            except WebSocketDisconnect:
-                break
+        pending_emotion_only = None
 
-            if msg.get("type") in ("websocket.disconnect", "websocket.close"):
-                break
+        while True:
+            msg = await ws.receive()
 
             if msg.get("bytes") is not None:
-                await fish.send_audio(msg["bytes"])
+                chunk = msg["bytes"]
+                tracker.add_chunk_pcm16(chunk)
+                await fish.send_audio(chunk)
                 continue
 
-            text = msg.get("text")
-            if text:
+            txt = msg.get("text")
+            if txt:
                 try:
-                    data = json.loads(text)
+                    data = json.loads(txt)
                 except Exception:
-                    if not await safe_send_json(
-                        ws,
-                        {"type": "error", "stage": "parse", "message": "invalid JSON"},
-                    ):
-                        break
+                    await safe_send_json(
+                        ws, {"type": "error", "stage": "parse", "message": "bad json"}
+                    )
                     continue
 
                 if data.get("type") == "end":
-                    try:
-                        await fish.mark_end_of_input()
-                    except Exception as e:
-                        await safe_send_json(
-                            ws,
-                            {"type": "error", "stage": "fish.end", "message": str(e)},
-                        )
-                        await safe_close(ws, 1011)
-                        return
-                elif data.get("type") == "upload":
-                    # Expect base64 PCM16 or raw bytes over WS in future
-                    try:
-                        b64 = data.get("audio_b64")
-                        if not isinstance(b64, str):
-                            raise ValueError("missing audio_b64")
-                        import base64
+                    # finalize input to STT
+                    await fish.mark_end_of_input()
 
-                        audio_bytes = base64.b64decode(b64)
-                        # Replace internal buffer with uploaded bytes and finalize
-                        if hasattr(fish, "load_audio_bytes"):
-                            await fish.load_audio_bytes(audio_bytes)
-                        else:
-                            # fallback: stream once via send_audio
-                            await fish.send_audio(audio_bytes)
-                        await fish.mark_end_of_input()
-                    except Exception as e:
+                    # start a timeout task that will fire emotion-only if no transcript arrives
+                    async def fire_emotion_only():
+                        await asyncio.sleep(6.0)
+                        prosody = tracker.finalize()
+                        emo = analyze_emotion(ws, prosody_state=prosody)
                         await safe_send_json(
                             ws,
-                            {"type": "error", "stage": "upload", "message": str(e)},
+                            {
+                                "type": "transcript.final",
+                                "data": {
+                                    "text": "",
+                                    "emotion": emo,
+                                    "source": "timeout",
+                                },
+                            },
                         )
+                        tracker.reset()
+
+                    pending_emotion_only = asyncio.create_task(fire_emotion_only())
+                    pending_task_ref["t"] = pending_emotion_only
+
                 continue
 
+    except WebSocketDisconnect:
+        pass
     finally:
-        events_task.cancel()
         with contextlib.suppress(Exception):
             await fish.close()
-        await safe_close(ws)
+        tracker.reset()
+        events_task.cancel()
 
 
-async def pipe_events(fish, ws):
+# keep a small state across finals for smoothing
+_va_state = {"valence": 0.0, "arousal": 0.0}  # or None to start empty
+_have_state = False
+
+# server/app/pipe.py (or inline in main.py)
+pending_task_ref = {"t": None}  # tiny holder; or close over a nonlocal in main
+
+
+async def pipe_events(fish, ws: WebSocket, get_prosody):
     async for ev in fish.events():
         if ev.get("type") == "transcript.final":
-            text = ev.get("data", {}).get("text", "")
-            text_scores = analyze_text(text)
+            # cancel timeout if active
+            t = pending_task_ref.get("t")
+            if t and not t.done():
+                t.cancel()
+                pending_task_ref["t"] = None
 
-            # Optional: pass prosody you compute during streaming
-            # e.g., prosody = {"rms": avg_rms_0_1, "pitch_var": pv, "speech_rate": sr}
-            prosody = {}
-            emo = fuse(text_scores, prosody)
+            # attach emotion
+            try:
+                prosody = get_prosody() or {}
+            except Exception:
+                prosody = {}
+            emo = analyze_emotion("", prosody_state=prosody)
 
             ev.setdefault("data", {})
             ev["data"]["emotion"] = emo
+            ev["data"]["source"] = ev["data"].get("source", "stt")
+            await safe_send_json(ws, ev)
+            continue
 
-        await ws.send_json(ev)
+        # forward other events (errors/debug)
+        await safe_send_json(ws, ev)

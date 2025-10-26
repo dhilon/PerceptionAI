@@ -1,85 +1,120 @@
-# server/app/fuse.py
+# server/app/nlp/fuse.py
 """
-Fuse text-based valence/arousal with optional prosody features from audio.
+Temporal smoothing for audio-only valence–arousal (VA).
 
-Inputs:
-  text_scores: dict from sentiment.analyze_text(...)
-  prosody: {
-      "rms": float in [0..1]         # loudness (normalized)
-      "pitch_var": float in [0..1]   # pitch variability
-      "speech_rate": float in [0..1] # words/sec normalized
-  }  # each is optional
+- Uses EMA smoothing with configurable alphas.
+- Optional short peak-hold so brief spikes survive smoothing.
+- ALWAYS labels via nearest-centroid from sentiment.PROTOTYPES (no coarse fallback).
+- Keeps full-precision state; do NOT round before storing state.
 
-Output:
-  { valence, arousal, label }
+Usage:
+    state = None
+    out = fuse(current_va, state)         # current_va = {"valence": v, "arousal": a}
+    state = out["state"]                  # keep for next call
 """
 
 from __future__ import annotations
 from typing import Dict, Optional
-import math
+import time
 
-NEUTRAL_V = 0.10
-NEUTRAL_A = 0.10
-
-# weights: valence mainly text; arousal from both
-W_TEXT_VAL = 0.9
-W_AUDIO_VAL = 0.1
-W_TEXT_ARO = 0.5
-W_AUDIO_ARO = 0.5
+# If you externalized neutral gates in gain.py, import them; otherwise define here.
+try:
+    from .gain import NEUTRAL_V, NEUTRAL_A
+except Exception:
+    NEUTRAL_V, NEUTRAL_A = 0.06, 0.06
 
 
-def _nz(x: Optional[float], default=0.0) -> float:
-    return float(x) if x is not None else default
+def _clamp(x: float, lo: float, hi: float) -> float:
+    return lo if x < lo else hi if x > hi else x
 
 
-def _normalize_valence(v: float) -> float:
-    return max(-1.0, min(1.0, v))
+def _ema(prev: float, new: float, alpha: float) -> float:
+    # alpha in (0,1]; higher alpha -> faster response
+    return alpha * new + (1.0 - alpha) * prev
 
 
-def _normalize_arousal(a: float) -> float:
-    return max(0.0, min(1.0, a))
+def fuse(
+    current: Dict[str, float],
+    state: Optional[Dict[str, float]] = None,
+    *,
+    alpha_valence: float = 0.75,  # faster by default (was 0.35–0.55 earlier)
+    alpha_arousal: float = 0.80,
+    peak_hold_ms: int = 600,  # keep recent peaks for ~0.6s
+    peak_decay: float = 0.95,  # slight decay while holding (0..1]
+    valence_peak_boost: float = 0.00,  # let valence peaks hold a bit too
+) -> Dict[str, float | str | Dict[str, float]]:
+    """
+    Params:
+      - alpha_valence / alpha_arousal: EMA smoothing factors.
+      - peak_hold_ms: duration to keep the last peak from collapsing immediately.
+      - peak_decay: multiplier applied to held arousal peak when taking max(ema, held).
+      - valence_peak_boost: similar light hold for valence peaks.
 
+    Returns:
+      {
+        "valence": float in [-1, 1],
+        "arousal": float in [0, 1],
+        "label": str,                      # nearest centroid
+        "state": { "valence": v_s, "arousal": a_s, "pv":..., "pa":..., "pt":... }
+      }
+    """
+    v_new = float(current.get("valence", 0.0))
+    a_new = float(current.get("arousal", 0.0))
+    now = time.time()
 
-def _label_from_quadrant(v: float, a: float) -> str:
-    # simple quadrant mapping, refined around chart semantics
-    if abs(v) < NEUTRAL_V and a < NEUTRAL_A:
-        return "neutral"
-    if v >= 0 and a >= 0.6:
-        return "excited" if v > 0.6 else "happy"
-    if v >= 0 and a < 0.4:
-        return "calm" if v >= 0.6 else "content"
-    if v < 0 and a >= 0.6:
-        return "angry"  # includes afraid/frustrated cluster
-    if v < 0 and a < 0.4:
-        return "sad"
-    return "neutral"
+    # Initialize or recover running state
+    if not state:
+        v_s = _clamp(v_new, -1.0, 1.0)
+        a_s = _clamp(a_new, 0.0, 1.0)
+        # track last peaks and their timestamp
+        pv, pa, pt = v_new, a_new, now
+        state = {"valence": v_s, "arousal": a_s, "pv": pv, "pa": pa, "pt": pt}
+    else:
+        v_prev = float(state.get("valence", v_new))
+        a_prev = float(state.get("arousal", a_new))
+        v_s = _ema(v_prev, v_new, alpha_valence)
+        a_s = _ema(a_prev, a_new, alpha_arousal)
 
+        # Peak-hold logic
+        pv = float(state.get("pv", v_new))
+        pa = float(state.get("pa", a_new))
+        pt = float(state.get("pt", now))
+        hold = max(0.0, peak_hold_ms) / 1000.0
 
-def fuse(text_scores: Dict, prosody: Optional[Dict] = None) -> Dict[str, float | str]:
-    prosody = prosody or {}
-    v_text = float(text_scores.get("valence", 0.0))
-    a_text = float(text_scores.get("arousal", 0.0))
+        # Update peaks or expire hold window
+        if a_new > pa or (now - pt) > hold:
+            pa, pt = a_new, now
+        if v_new > pv or (now - pt) > hold:
+            pv = v_new  # reuse same timer for simplicity
 
-    # Map audio features → arousal proxy in [0..1]
-    rms = _nz(prosody.get("rms"))  # louder → higher arousal
-    pitch_var = _nz(prosody.get("pitch_var"))  # more variation → higher arousal
-    speech_rt = _nz(prosody.get("speech_rate"))  # faster → higher arousal
+        # Apply soft peak hold (use max of EMA and slightly-decayed peak)
+        a_s = max(a_s, pa * peak_decay)
+        # v_s = max(v_s, pv * valence_peak_boost)
 
-    # Combine audio features (bounded)
-    a_audio = max(0.0, min(1.0, 0.50 * rms + 0.30 * pitch_var + 0.20 * speech_rt))
+        # Clamp
+        v_s = _clamp(v_s, -1.0, 1.0)
+        a_s = _clamp(a_s, 0.0, 1.0)
 
-    # Valence slightly nudged by prosody (anger tends to be louder/variable, but keep small)
-    v_audio = (
-        0.20 * (rms + pitch_var) - 0.10 * speech_rt
-    )  # tiny effect; could be learned
+        # Persist state
+        state.update({"pv": pv, "pa": pa, "pt": pt})
 
-    # Fuse
-    v = _normalize_valence(W_TEXT_VAL * v_text + W_AUDIO_VAL * v_audio)
-    a = _normalize_arousal(W_TEXT_ARO * a_text + W_AUDIO_ARO * a_audio)
+    # Neutral override (use smoothed values)
+    if abs(v_s) < NEUTRAL_V and a_s < NEUTRAL_A:
+        label = "neutral"
+        v_out, a_out = 0.0, 0.0
+    else:
+        # Always label via nearest centroid in VA space
+        from .sentiment import _nearest_label  # uses PROTOTYPES defined there
 
-    # Neutral rule
-    if abs(v) < NEUTRAL_V and a < NEUTRAL_A:
-        return {"valence": 0.0, "arousal": 0.0, "label": "neutral"}
+        label = _nearest_label(v_s, a_s)
+        v_out, a_out = v_s, a_s
 
-    label = _label_from_quadrant(v, a)
-    return {"valence": v, "arousal": a, "label": label}
+    # Store final smoothed values back in state (full precision; NO rounding)
+    state.update({"valence": v_s, "arousal": a_s})
+
+    return {
+        "valence": v_out,
+        "arousal": a_out,
+        "label": label,
+        "state": state,
+    }

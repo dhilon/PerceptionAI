@@ -4,7 +4,7 @@ import ControlBar from "./components/ControlBar";
 import { createWS, WSStatus } from "./lib/ws";
 import { startMicPCM16, StopFn } from "./lib/audio";
 
-type Transcript = { text: string; emotion?: { label: string; sentiment: number; arousal: number; valence: number }; duration?: number };
+type Transcript = { text: string; emotion?: { label: string; arousal: number; valence: number }; duration?: number };
 
 export default function App() {
     const [status, setStatus] = useState<WSStatus>("idle");
@@ -142,7 +142,6 @@ export default function App() {
                             {t.emotion && (
                                 <div style={{ marginTop: 4, fontSize: 13, opacity: 0.8 }}>
                                     emotion: <b>{t.emotion.label}</b>,
-                                    sentiment: <b>{t.emotion.sentiment?.toFixed(2)}</b>,
                                     arousal: <b>{t.emotion.arousal?.toFixed(2)}</b>,
                                     valence: <b>{t.emotion.valence?.toFixed(2)}</b>
                                 </div>
