@@ -84,8 +84,10 @@ def fuse_emotion(
 
     polarity = float(sentiment_result.get("polarity", 0.0))  # -1..1
     text_valence01 = (polarity + 1.0) / 2.0
-    # Blend: text drives valence more; audio refines
+    text_arousal01 = float(sentiment_result.get("arousal", 0.5))
+    # Blend: text drives valence more; audio refines. Arousal blends both.
     fused_valence01 = 0.65 * text_valence01 + 0.35 * audio_valence
+    fused_arousal01 = 0.5 * text_arousal01 + 0.5 * arousal
 
     scores: Dict[str, float] = sentiment_result.get("scores", {}) or {}
     if not scores:
@@ -102,5 +104,5 @@ def fuse_emotion(
     elif fused_valence01 <= 0.45:
         candidates = [c for c in candidates if c in NEGATIVE_SET] or candidates
 
-    label = _choose_label_from_av(arousal, fused_valence01, candidates)
-    return {"arousal": arousal, "valence": fused_valence01, "label": label}
+    label = _choose_label_from_av(fused_arousal01, fused_valence01, candidates)
+    return {"arousal": fused_arousal01, "valence": fused_valence01, "label": label}

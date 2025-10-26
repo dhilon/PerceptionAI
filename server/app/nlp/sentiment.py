@@ -61,6 +61,47 @@ def classify_emotions(text: str) -> Dict[str, object]:
         }
 
     polarity = float(TextBlob(text).sentiment.polarity)
+
+    # Lightweight text signals to capture complex tones (nervousness, surprise, sarcasm)
+    lowered = text.lower()
+    exclaim = text.count("!")
+    qmarks = text.count("?")
+    ellipses = lowered.count("...")
+    all_caps_tokens = sum(1 for t in text.split() if len(t) >= 2 and t.isupper())
+    hedges = sum(
+        1
+        for w in ["uh", "um", "er", "like", "kinda", "sorta"]
+        if f" {w} " in f" {lowered} "
+    )
+    worry_words = [
+        "nervous",
+        "anxious",
+        "worried",
+        "on edge",
+        "panic",
+        "scared",
+        "afraid",
+    ]
+    nervous_hits = sum(1 for w in worry_words if w in lowered)
+    sarcasm_markers = [
+        "yeah right",
+        "sure",
+        "as if",
+        "/s",
+        "totally",
+        "great...",
+        "nice...",
+    ]
+    sarcasm_hits = sum(1 for w in sarcasm_markers if w in lowered)
+    surprise_hits = qmarks + (1 if "wow" in lowered or "whoa" in lowered else 0)
+
+    # Estimate text arousal 0..1 from punctuation and emphasis
+    ta = 0.0
+    ta += min(1.0, exclaim * 0.25)
+    ta += min(1.0, qmarks * 0.15)
+    ta += min(1.0, all_caps_tokens * 0.15)
+    ta += min(1.0, max(0, 0.2 * (len(text) / 140.0)))  # slight scale with length
+    text_arousal01 = max(0.0, min(1.0, 0.25 + 0.25 * ta))
     pos_w = max(0.0, polarity)
     neg_w = max(0.0, -polarity)
     neu_w = max(0.0, 1.0 - (pos_w + neg_w))
@@ -102,6 +143,30 @@ def classify_emotions(text: str) -> Dict[str, object]:
         # near-zero polarity → neutral
         scores["Calm"] = 1.0
 
+    # Bias toward complex tones based on signals (without full lexicon)
+    if nervous_hits + hedges + surprise_hits > 0:
+        # Encourage Nervous/Worried/Scared when uncertainty cues present
+        bias = 0.15 + 0.05 * (nervous_hits + hedges)
+        for lab in ("Nervous", "Worried", "Scared"):
+            if lab in scores:
+                scores[lab] = min(1.0, scores[lab] + bias)
+    if sarcasm_hits > 0:
+        scores["Sarcastic"] = min(
+            1.0, scores.get("Sarcastic", 0.0) + 0.2 * sarcasm_hits
+        )
+
     # choose best label
     best = max(scores.items(), key=lambda kv: kv[1])[0]
-    return {"scores": scores, "label": best, "polarity": polarity}
+    return {
+        "scores": scores,
+        "label": best,
+        "polarity": polarity,
+        "arousal": float(text_arousal01),
+        "signals": {
+            "nervousHits": int(nervous_hits + hedges),
+            "surpriseHits": int(surprise_hits),
+            "sarcasmHits": int(sarcasm_hits),
+            "exclaim": int(exclaim),
+            "qmarks": int(qmarks),
+        },
+    }

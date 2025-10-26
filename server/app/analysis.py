@@ -24,4 +24,9 @@ def analyze_emotion(text: str, prosody_state: dict | None = None):
     base_label = str(fused["label"]).strip()
     out_label = f"{qualifier} {base_label}".strip() if qualifier else base_label
 
-    return {"label": out_label, "sentiment": float(round(polarity, 2))}
+    return {
+        "label": out_label,
+        "sentiment": float(round(polarity, 2)),
+        "valence": float(round(fused.get("valence", 0.5), 2)),
+        "arousal": float(round(fused.get("arousal", 0.5), 2)),
+    }

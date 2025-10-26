@@ -4,7 +4,7 @@ import ControlBar from "./components/ControlBar";
 import { createWS, WSStatus } from "./lib/ws";
 import { startMicPCM16, StopFn } from "./lib/audio";
 
-type Transcript = { text: string; emotion?: { label: string; sentiment: number }; duration?: number };
+type Transcript = { text: string; emotion?: { label: string; sentiment: number; arousal: number; valence: number }; duration?: number };
 
 export default function App() {
     const [status, setStatus] = useState<WSStatus>("idle");
@@ -26,8 +26,10 @@ export default function App() {
                 } else if (msg?.type === "transcript.final") {
                     setPartial("");
                     console.log("transcript.final", msg.data);
-                    const segments: Array<{ text: string }> | undefined = msg.data?.segments;
+                    const segments: Array<{ text: string, end: number, start: number }> | undefined = msg.data?.segments;
                     const full: string = msg.data?.text ?? "";
+                    const dur = msg.data?.duration;
+                    const durationKey = (typeof dur === "number" && isFinite(dur)) ? dur.toFixed(3) : undefined;
                     const prev = finalizedPrefixRef.current;
 
                     // Prefer segments only when multiple segments are present and they contribute beyond the previous prefix.
@@ -37,6 +39,7 @@ export default function App() {
 
                         // Emit only the portion of each segment that extends beyond prev
                         let consumed = 0; // characters covered so far
+                        const newEntries: Transcript[] = [];
                         for (const seg of segments) {
                             const segText = seg?.text ?? "";
                             const nextConsumed = consumed + segText.length;
@@ -44,12 +47,20 @@ export default function App() {
                                 const sliceStart = Math.max(0, prev.length - consumed);
                                 const piece = segText.slice(sliceStart).trim();
                                 if (piece) {
-                                    setFinals(f => [{ text: piece, emotion: msg.data?.emotion, duration: msg.data?.duration }, ...f]);
+                                    newEntries.push({ text: piece, emotion: msg.data?.emotion, duration: seg.end - seg.start });
                                 }
                             }
                             consumed = nextConsumed;
                         }
                         finalizedPrefixRef.current = concat;
+                        if (newEntries.length) {
+                            setFinals(f => {
+                                const filtered = durationKey
+                                    ? f.filter(t => !(typeof t.duration === "number" && t.duration.toFixed(3) === durationKey))
+                                    : f;
+                                return [...newEntries, ...filtered];
+                            });
+                        }
                     } else {
                         // Single (or missing) segment → compute delta from full text
                         let delta = full;
@@ -58,7 +69,12 @@ export default function App() {
                         }
                         finalizedPrefixRef.current = full;
                         if (delta) {
-                            setFinals(f => [{ text: delta, emotion: msg.data?.emotion, duration: msg.data?.duration }, ...f]);
+                            setFinals(f => {
+                                const filtered = durationKey
+                                    ? f.filter(t => !(typeof t.duration === "number" && t.duration.toFixed(3) === durationKey))
+                                    : f;
+                                return [{ text: delta, emotion: msg.data?.emotion, duration: msg.data?.duration }, ...filtered];
+                            });
                         }
                     }
                 } else if (msg?.type === "error") {
@@ -125,7 +141,10 @@ export default function App() {
                             <div><strong>{t.text}</strong></div>
                             {t.emotion && (
                                 <div style={{ marginTop: 4, fontSize: 13, opacity: 0.8 }}>
-                                    emotion: <b>{t.emotion.label}</b> ({t.emotion.sentiment.toFixed(2)})
+                                    emotion: <b>{t.emotion.label}</b>,
+                                    sentiment: <b>{t.emotion.sentiment?.toFixed(2)}</b>,
+                                    arousal: <b>{t.emotion.arousal?.toFixed(2)}</b>,
+                                    valence: <b>{t.emotion.valence?.toFixed(2)}</b>
                                 </div>
                             )}
                             <div style={{ marginTop: 4, fontSize: 13, opacity: 0.8 }}>duration: {t.duration?.toFixed(2)} seconds</div>

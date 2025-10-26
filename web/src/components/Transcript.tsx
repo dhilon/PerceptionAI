@@ -1,6 +1,6 @@
 import React from "react";
 
-export default function Transcript({ lines }: { lines: { text: string, sentiment?: number, label?: string }[] }) {
+export default function Transcript({ lines }: { lines: { text: string, sentiment?: number, arousal?: number, valence?: number }[] }) {
     return (
         <div className="space-y-1">
             {lines.map((l, i) => (

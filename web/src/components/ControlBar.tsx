@@ -66,12 +66,13 @@ export default function ControlBar({ status, isRecording, level = 0, onStart, on
                 <button onClick={onStart} disabled={isRecording || status === "connecting"} style={{ ...S.btn, ...S.primary }}>
                     🎙️ Record
                 </button>
-                <button onClick={onStop} disabled={!isRecording} style={{ ...S.btn, ...S.warning }}>
-                    🔪 Clip Script
-                </button>
-                <button onClick={onEnd} disabled={!onEnd} style={{ ...S.btn, ...S.danger }}>
+                <button onClick={onEnd} disabled={!onEnd} style={{ ...S.btn, ...S.warning }}>
                     ⏸️ Pause Conversation
                 </button>
+                <button onClick={onStop} disabled={!isRecording} style={{ ...S.btn, ...S.danger }}>
+                    🔪 Clip Script
+                </button>
+
                 {onReset && <button onClick={onReset} style={S.btn}>↺ Reset</button>}
             </div>
         </div>

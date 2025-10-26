@@ -203,6 +203,23 @@ async def main():
 asyncio.run(main())
 PY
 
+### 🎛️ Controls: Pause Conversation vs. Clip Script
+
+#### ⏸️ Pause Conversation
+- Temporarily halts streaming without clearing the timer.
+- On click, the frontend sends `{ "type": "end" }` to the WebSocket, prompting the backend to finalize the current segment.
+- Timer continues from where it left off when you resume recording (no reset to 0).
+- Use when you want a clean transcript boundary without discarding previous content.
+
+#### 🔪 Clip Script
+- Finalizes the current segment and creates a new transcript entry immediately.
+- Intended to “clip” the current script unit. Useful for marking takes/sections while staying in the same session.
+- This also issues `{ "type": "end" }`, but your UI will show the clipped chunk distinctly.
+
+Notes
+- If you prefer one-shot uploads instead of streaming, send `{ "type": "upload", audio_b64 }` where `audio_b64` is your PCM16 audio as Base64; the server will replace the buffer and finalize right away.
+- In REST mode, the server accumulates or replaces bytes internally and converts to `.wav` on finalize.
+
 🔍 Architecture Diagram
          ┌────────────────────────────┐
          │  React + Vite Frontend     │
