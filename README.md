@@ -234,6 +234,9 @@ We score emotion along two continuous dimensions plus a discrete label:
   - 0.00 ≈ very calm; 1.00 ≈ very intense/energized.
   - Fused as: `arousal = 0.5 * text_arousal + 0.5 * audio_arousal`.
 
+<img width="576" height="388" alt="image" src="https://github.com/user-attachments/assets/fb0b8ca4-b570-4ee7-80d4-45d12fcc0d83" />
+
+
 - Label: selected from the 24-label taxonomy (Happy, Sad, Angry, …) plus the graph displayed below to fit the fused valence/arousal quadrant and text cues.
 
 Display
