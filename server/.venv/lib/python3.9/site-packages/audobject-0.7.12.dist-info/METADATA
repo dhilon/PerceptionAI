@@ -1,0 +1,67 @@
+Metadata-Version: 2.4
+Name: audobject
+Version: 0.7.12
+Summary: Generic object interface
+Author-email: Hagen Wierstorf <hwierstorf@audeering.com>
+License: Copyright (c) 2019-present audEERING GmbH. All rights reserved.
+        
+        Unauthorized copying of this file, via any medium is strictly prohibited.
+        Proprietary and confidential.
+        
+Project-URL: repository, https://github.com/audeering/audobject/
+Project-URL: documentation, https://audeering.github.io/audobject/
+Keywords: serialization,yaml
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Intended Audience :: Science/Research
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Topic :: Scientific/Engineering
+Requires-Python: >=3.9
+Description-Content-Type: text/x-rst
+License-File: LICENSE
+Requires-Dist: asttokens>=2.0.0
+Requires-Dist: audeer>=1.18.0
+Requires-Dist: importlib-metadata>=4.8.0
+Requires-Dist: oyaml
+Requires-Dist: packaging
+Dynamic: license-file
+
+=========
+audobject
+=========
+
+|tests| |coverage| |docs| |python-versions| |license|
+
+Generic interface for serializing objects to yaml_.
+
+Have a look at the installation_ and usage_ instructions.
+
+.. _yaml: https://yaml.org/
+.. _installation: https://audeering.github.io/audobject/install.html
+.. _usage: https://audeering.github.io/audobject/usage.html
+
+
+.. badges images and links:
+.. |tests| image:: https://github.com/audeering/audobject/workflows/Test/badge.svg
+    :target: https://github.com/audeering/audobject/actions?query=workflow%3ATest
+    :alt: Test status
+.. |coverage| image:: https://codecov.io/gh/audeering/audobject/branch/main/graph/badge.svg?token=7S4Y766FC7
+    :target: https://codecov.io/gh/audeering/audobject/
+    :alt: code coverage
+.. |docs| image:: https://img.shields.io/pypi/v/audobject?label=docs
+    :target: https://audeering.github.io/audobject/
+    :alt: audobject's documentation
+.. |license| image:: https://img.shields.io/badge/license-MIT-green.svg
+    :target: https://github.com/audeering/audobject/blob/main/LICENSE
+    :alt: audobject's MIT license
+.. |python-versions| image:: https://img.shields.io/pypi/pyversions/audobject.svg
+    :target: https://pypi.org/project/audobject/
+    :alt: audobjects's supported Python versions

@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import type { WSStatus } from "../lib/ws";
+import { useAudioWS } from "../lib/useAudioWS";
 
 type Props = {
-    status: WSStatus;
+    status: ReturnType<typeof useAudioWS>["status"];
     isRecording: boolean;
     level?: number; // 0..1
     onStart: () => void;
@@ -11,7 +11,7 @@ type Props = {
     onEnd?: () => void;
 };
 
-const pill: Record<WSStatus, string> = {
+const pill: Record<ReturnType<typeof useAudioWS>["status"], string> = {
     idle: "#9CA3AF", connecting: "#F59E0B", open: "#10B981", closed: "#6B7280", error: "#EF4444",
 };
 

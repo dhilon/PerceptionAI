@@ -1,157 +1,34 @@
-// web/src/App.tsx
-import React, { useRef, useState, useEffect } from "react";
+import React, { useState } from "react";
 import ControlBar from "./components/ControlBar";
-import { createWS, WSStatus } from "./lib/ws";
-import { startMicPCM16, StopFn } from "./lib/audio";
-
-type Transcript = { text: string; emotion?: { label: string; arousal: number; valence: number }; duration?: number };
+import { useAudioWS } from "./lib/useAudioWS";
 
 export default function App() {
-    const [status, setStatus] = useState<WSStatus>("idle");
+
+    const { status, level, emotion, proba, start, stop } = useAudioWS("ws://localhost:8001/ws/audio");
     const [isRecording, setIsRecording] = useState(false);
-    const [level, setLevel] = useState(0);
-    const [partial, setPartial] = useState("");
-    const [finals, setFinals] = useState<Transcript[]>([]);
-
-    const wsRef = useRef<ReturnType<typeof createWS> | null>(null);
-    const stopRef = useRef<StopFn | null>(null);
-    // Tracks the cumulative finalized text so we can extract only the new delta on each final
-    const finalizedPrefixRef = useRef("");
-
-    useEffect(() => {
-        const ws = createWS(
-            (msg) => {
-                if (msg?.type === "transcript.partial") {
-                    setPartial(msg.data?.text ?? "");
-                } else if (msg?.type === "transcript.final") {
-                    setPartial("");
-                    console.log("transcript.final", msg.data);
-                    const segments: Array<{ text: string, end: number, start: number }> | undefined = msg.data?.segments;
-                    const full: string = msg.data?.text ?? "";
-                    const dur = msg.data?.duration;
-                    const durationKey = (typeof dur === "number" && isFinite(dur)) ? dur.toFixed(3) : undefined;
-                    const prev = finalizedPrefixRef.current;
-
-                    // Prefer segments only when multiple segments are present and they contribute beyond the previous prefix.
-                    if (Array.isArray(segments) && segments.length > 1) {
-                        // Build concat to update prefix and compute deltas per segment
-                        const concat = segments.map(s => s?.text ?? "").join("");
-
-                        // Emit only the portion of each segment that extends beyond prev
-                        let consumed = 0; // characters covered so far
-                        const newEntries: Transcript[] = [];
-                        for (const seg of segments) {
-                            const segText = seg?.text ?? "";
-                            const nextConsumed = consumed + segText.length;
-                            if (nextConsumed > prev.length) {
-                                const sliceStart = Math.max(0, prev.length - consumed);
-                                const piece = segText.slice(sliceStart).trim();
-                                if (piece) {
-                                    newEntries.push({ text: piece, emotion: msg.data?.emotion, duration: seg.end - seg.start });
-                                }
-                            }
-                            consumed = nextConsumed;
-                        }
-                        finalizedPrefixRef.current = concat;
-                        if (newEntries.length) {
-                            setFinals(f => {
-                                const filtered = durationKey
-                                    ? f.filter(t => !(typeof t.duration === "number" && t.duration.toFixed(3) === durationKey))
-                                    : f;
-                                return [...newEntries, ...filtered];
-                            });
-                        }
-                    } else {
-                        // Single (or missing) segment → compute delta from full text
-                        let delta = full;
-                        if (prev && full.startsWith(prev)) {
-                            delta = full.slice(prev.length).trim();
-                        }
-                        finalizedPrefixRef.current = full;
-                        if (delta) {
-                            setFinals(f => {
-                                const filtered = durationKey
-                                    ? f.filter(t => !(typeof t.duration === "number" && t.duration.toFixed(3) === durationKey))
-                                    : f;
-                                return [{ text: delta, emotion: msg.data?.emotion, duration: msg.data?.duration }, ...filtered];
-                            });
-                        }
-                    }
-                } else if (msg?.type === "error") {
-                    console.error("Server error:", msg.stage, msg.message);
-                } else if (msg?.type === "debug") {
-                    console.log("[DEBUG]", msg);
-                }
-            },
-            setStatus
-        );
-        wsRef.current = ws;
-        return () => ws.close();
-    }, []);
-
-    const onStart = async () => {
-        const ws = wsRef.current!;
-        setIsRecording(true);
-        finalizedPrefixRef.current = "";
-        setPartial("");
-        setFinals([]);
-        stopRef.current = await startMicPCM16(
-            (buf) => ws.sendBytes(buf),   // PCM16 → backend
-            (rms) => setLevel(rms),       // live level 0..1
-            16000
-        );
-    };
-
-
-    const onEnd = async () => {
-        await stopRef.current?.();
-        stopRef.current = null;
-        setIsRecording(false);
-        setLevel(0);
-        wsRef.current?.sendJSON({ type: "end" }); // finalize on server (and Fish realtime)
-    };
-
-    const onClip = async () => {
-        await wsRef.current?.sendJSON({ type: "end" });
-    }
 
     return (
-        <div style={{ fontFamily: "system-ui", padding: 20, maxWidth: 900, margin: "0 auto" }}>
-            <h1 style={{ marginTop: 0 }}>PerceptionAI</h1>
-
+        <div>
             <ControlBar
                 status={status}
                 isRecording={isRecording}
                 level={level}
-                onStart={onStart}
-                onStop={onClip}
-                onEnd={onEnd}
+                onStart={async () => { await start(); setIsRecording(true); }}
+                onStop={() => { stop(); setIsRecording(false); }}
+                onEnd={() => { stop(); setIsRecording(false); }}
             />
 
-            <section style={{ marginTop: 16 }}>
-                <h3 style={{ margin: "12px 0 6px" }}>Partial</h3>
-                <div style={{ padding: 12, minHeight: 40, border: "1px dashed #d1d5db", borderRadius: 8, background: "#fff" }}>
-                    {partial || <span style={{ opacity: 0.6 }}>…</span>}
+            <div style={{
+                padding: 12,
+                border: "1px solid #e5e7eb",
+                borderRadius: 12,
+                marginTop: 12,
+            }}>
+                <h3 style={{ margin: 0 }}>Emotion: {emotion || ""}</h3>
+                <div style={{ fontSize: 12, color: "#555" }}>
+                    Raw Probabilities: {JSON.stringify(proba || [])}
                 </div>
-
-                <h3 style={{ margin: "16px 0 6px" }}>Final transcripts</h3>
-                <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "grid", gap: 8 }}>
-                    {finals.map((t, i) => (
-                        <li key={i} style={{ padding: 12, border: "1px solid #e5e7eb", borderRadius: 8, background: "#fff" }}>
-                            <div><strong>{t.text}</strong></div>
-                            {t.emotion && (
-                                <div style={{ marginTop: 4, fontSize: 13, opacity: 0.8 }}>
-                                    emotion: <b>{t.emotion.label}</b>,
-                                    arousal: <b>{t.emotion.arousal?.toFixed(2)}</b>,
-                                    valence: <b>{t.emotion.valence?.toFixed(2)}</b>
-                                </div>
-                            )}
-                            <div style={{ marginTop: 4, fontSize: 13, opacity: 0.8 }}>duration: {t.duration?.toFixed(2)} seconds</div>
-                        </li>
-                    ))}
-                    {finals.length === 0 && <li style={{ opacity: 0.6 }}>No transcripts yet.</li>}
-                </ul>
-            </section>
+            </div>
         </div>
     );
 }
