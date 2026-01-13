@@ -1,3 +1,9 @@
 {
-    "buildCommand": "sh dev.sh"
+    "framework": "vite",
+    "installCommand": "npm --prefix web install",
+    "buildCommand": "npm --prefix web run build",
+    "outputDirectory": "web/dist",
+    "env": {
+        "ROLLUP_WASM": "true"
+    }
 }
