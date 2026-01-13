@@ -1,5 +1,5 @@
 # PerceptionAI
-Real-time voice intelligence: fast speech-to-text with simple emotion analysis.
+Real-time voice intelligence: fast speech-to-text with simple emotion analysis. We now extract audio features with openSMILE and train/infer models using scikit-learn.
 
 ## 🚀 Quickstart (TL;DR)
 - Backend + Frontend in one command:
@@ -12,7 +12,7 @@ Real-time voice intelligence: fast speech-to-text with simple emotion analysis.
 That’s it. See below for details if you need them.
 
 PerceptionAI is a real-time speech-to-text platform built for the modern voice-driven web.
-It streams audio directly from the user’s browser microphone, transmits it through a high-performance FastAPI WebSocket backend, and interfaces with the Fish Audio API for transcription and natural language analysis.
+It streams audio directly from the user’s browser microphone and transmits it through a high-performance FastAPI WebSocket backend for on-device feature extraction and emotion analysis.
 
 Originally created for Cal Hacks, this project demonstrates how to seamlessly combine AI voice intelligence, cloud-scale ASR (Automatic Speech Recognition), and real-time web tech into a cohesive, production-ready experience.
 
@@ -28,8 +28,6 @@ PerceptionAI/
 │  └─ app/
 │     ├─ main.py                     # /ws/stream WebSocket
 │     ├─ config.py                   # env via pydantic-settings
-│     ├─ fish_audio/
-│     │  └─ client.py                # Fish Audio ASR (REST/WS)
 │     └─ ...
 └─ web/                              # React/Vite frontend
    ├─ index.html
@@ -46,11 +44,12 @@ PerceptionAI/
 | --- | --- | --- |
 | Frontend | React, TypeScript, Vite | Modular UI, fast DX, WebSocket support |
 | Audio Handling | Web Audio API (AudioWorklet) | Capture mic, encode PCM16, stream WS |
+| Audio Features | openSMILE | Low-level descriptors extraction from audio |
+| ML Models | scikit-learn | Training and inference for emotion models |
 | Backend | Python 3.13, FastAPI | High-performance REST + WebSocket |
 | Async Runtime | uvicorn, asyncio | Concurrent, event-driven networking |
-| ASR | Fish Audio API | Speech-to-text (REST/WS) |
 | HTTP Client | httpx | Async uploads for REST |
-| Realtime | websockets | Fish realtime WS client |
+| Realtime | websockets | WebSocket transport between frontend and backend |
 | Config | pydantic-settings | Type-safe env management |
 | Package Mgmt | pip, npm | Dependencies for both layers |
 | Launcher | Bash (`scripts/dev.sh`) | One command to run both apps |
@@ -58,28 +57,12 @@ PerceptionAI/
 ## ⚙️ Module Breakdown
 🧩 Server — server/app/
 File	Purpose
-main.py	Defines /ws/stream, handles WebSocket lifecycle, receives audio chunks, calls Fish ASR, emits transcripts
+main.py	Defines /ws/stream, handles WebSocket lifecycle, receives audio chunks, emits emotion predictions
 config.py	Loads .env safely using pydantic-settings, defines API URLs, keys, and DB params
-fish_audio/client.py	Unified API client supporting both ASR REST (default) and Realtime WS (optional). Includes mock mode for local testing.
-Key Classes
-
-FishAudioASRClient
-
-Buffers PCM16 data → writes WAV → uploads to https://api.fish.audio/v1/asr.
-
-Handles async REST requests via httpx.
-
-Emits final transcript events through an asyncio.Queue.
-
-FishAudioRealtimeWSClient
-
-(Experimental) Connects to Fish’s WS for streaming transcription.
-
-Uses websockets.connect with Bearer headers and SSL context.
-
-get_fish_client()
-
-Chooses between REST, Realtime, or Mock modes depending on FISH_MODE in .env.
+audio/feature_extractor.py	Extracts openSMILE features (LLDs/statistics) from WAV/PCM audio
+model/emotion_model.py	Loads and runs a scikit-learn emotion model
+model/train_emotion_model.py	Training script to fit scikit-learn models on extracted features
+Key Components
 
 🌐 Frontend — web/src/
 File	Role
@@ -111,13 +94,6 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 Environment File
-
-Create a file called .env in server/:
-
-FISH_API_KEY=sk_live_your_api_key_here
-FISH_MODE=asr_rest
-FISH_ASR_URL=https://api.fish.audio/v1/asr
-FISH_REALTIME_WS=wss://api.fish.audio/v1/realtime
 
 
 ⚠️ Never commit .env — it’s ignored by .gitignore.
@@ -159,11 +135,7 @@ User clicks Record → frontend requests mic access.
 
 Browser streams audio frames as binary PCM16 over WS.
 
-Backend buffers chunks → on { "type": "end" }, saves to .wav.
-
-Fish ASR API transcribes → returns JSON with text + segments.
-
-Backend sends transcript.final to browser.
+Backend buffers chunks, extracts features, predicts emotion, and streams results back to the browser.
 
 UI displays transcript and timing data.
 
@@ -181,29 +153,6 @@ Speak normally for a few seconds
 Click Stop
 
 The transcript appears below
-
-B) Through the terminal (manual test)
-
-Use ffmpeg to record and transcribe manually:
-
-# record 5 seconds of mono PCM16 audio
-ffmpeg -f avfoundation -i ":0" -t 5 -ac 1 -ar 16000 test.wav
-
-# run backend transcription manually
-python - <<'PY'
-import asyncio
-from app.fish_audio.client import FishAudioASRClient
-async def main():
-    client = FishAudioASRClient()
-    await client.connect()
-    with open("test.wav", "rb") as f:
-        await client.send_audio(f.read())
-    await client.mark_end_of_input()
-    async for ev in client.events():
-        print(ev)
-        break
-asyncio.run(main())
-PY
 
 ### 🎛️ Controls: Pause Conversation vs. Clip Script
 
@@ -254,15 +203,15 @@ Display
           ┌────────────────────────────┐
           │  FastAPI Server (Python)   │
           │  - WebSocket endpoint      │
-          │  - FishAudioASRClient()    │
+          │  - EmotionModel (sklearn)  │
           └────────────┬───────────────┘
                       │
                       ▼
-         ┌────────────────────────────┐
-         │   Fish Audio Cloud API     │
-         │   - /v1/asr (REST)         │
-         │   - /v1/realtime (WS)      │
-         └────────────────────────────┘
+        ┌────────────────────────────┐
+        │   Audio Feature Pipeline   │
+        │   - openSMILE features     │
+        │   - sklearn model          │
+        └────────────────────────────┘
 
 🧰 Dependencies
 Python (backend)
@@ -273,6 +222,8 @@ httpx	Async HTTP client for REST calls
 websockets	Async WS client (realtime mode)
 pydantic-settings	Loads .env config
 asyncio	Built-in concurrency
+opensmile	Audio feature extraction (LLDs, functionals)
+scikit-learn	Model training and inference for emotion classification/regression
 Node (frontend)
 Package	Purpose
 react + react-dom	UI library
@@ -289,8 +240,6 @@ CORS is enabled for local development but can be restricted by domain in product
 
 💡 Future Enhancements
 
-✅ Realtime ASR via Fish WebSocket
-
 🧩 Speaker diarization
 
 🎧 TTS playback
@@ -302,8 +251,6 @@ CORS is enabled for local development but can be restricted by domain in product
 📊 Live word visualization dashboard
 
 🤝 Credits
-
-Fish Audio — API provider for ASR/TTS
 
 FastAPI — backend framework
 
