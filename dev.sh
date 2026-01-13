@@ -60,7 +60,7 @@ fi
 
 echo "🚀 Starting backend (FastAPI) on :8001 ..."
 cd "$SERVER_DIR"
-uvicorn app.main:app --reload --port 8001 &
+"$SERVER_DIR/.venv/bin/python" -m uvicorn app.main:app --reload --port 8001 &
 BACK_PID=$!
 
 # ---- Frontend deps ----
